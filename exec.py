@@ -8,7 +8,7 @@ interval = 0.5  # seconds between updates
 
 sdr = RtlSdr()
 
-# configure device
+# configure device 
 sdr.sample_rate = 2.4e6
 sdr.center_freq = 2.4e9
 sdr.gain = 4
