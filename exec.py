@@ -4,17 +4,17 @@ from matplotlib import mlab
 from rtlsdr import RtlSdr
 
 NFFT = 1024
-interval = 0.5  # seconds between updates
+interval = 0.1  # seconds between updates
 
 sdr = RtlSdr()
 
 # configure device 
-sdr.sample_rate = 2.4e6
-sdr.center_freq = 2.4e9
-sdr.gain = 4
+sdr.sample_rate = 3e6
+sdr.center_freq = 123e6
+sdr.gain = 12
 
-Fs = sdr.sample_rate / 1e6   # MHz
-Fc = sdr.center_freq / 1e6   # MHz
+Fs = sdr.sample_rate / 1e9  # GHz
+Fc = sdr.center_freq / 1e9   # GHz
 
 try:
     plt.ion()
@@ -24,7 +24,7 @@ try:
     samples = sdr.read_samples(256 * 1024)
     _, _, line = ax.psd(samples, NFFT=NFFT, Fs=Fs, Fc=Fc, return_line=True)
     line = line[0]
-    ax.set_xlabel('Frequency (MHz)')
+    ax.set_xlabel('Frequency (GHz)')
     ax.set_ylabel('Relative power (dB)')
     plt.show()
 
