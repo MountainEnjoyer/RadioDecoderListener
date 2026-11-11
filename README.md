@@ -7,4 +7,8 @@ source .venv/bin/activate # to activate
 rtl_test # to test
 ```
 
+### Installation
+```sh
+pip install pyrtlsdr numpy scipy matplotlib sounddevice
+```
 
