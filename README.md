@@ -1,46 +1,44 @@
 # RadioDecoderListener
 
-A live spectrum viewer for an RTL-SDR dongle, written in Python. It shows the radio spectrum around a chosen frequency, updates it several times per second, and has two buttons to tune up and down by 1 MHz.
+A live FM radio receiver in Python. It drives an RTL-SDR dongle, shows the radio spectrum in a window, and plays the station you tune to through your speakers, continuously and in real time. Buttons tune by ±0.1 MHz and ±1 MHz.
 
-It is the starting point of a multi-mode software-defined radio (SDR) project: the tool used to look at the radio spectrum, find stations and check reception before recording and decoding them.
+Everything between the antenna and the speakers is done in Python with NumPy and SciPy: frequency shift, channel filter, decimation, FM demodulation, de-emphasis and audio filtering, on a stream of 2.4 million samples per second.
 
-## What it shows
+It is the real-time stage of a multi-mode software-defined radio (SDR) project. The earlier repositories build each piece offline; this one runs them live:
 
-The window plots **power against frequency** over a 2.4 MHz wide slice of the radio spectrum, centred on the tuned frequency:
-
-- **Stations** appear as peaks or humps rising above the noise floor. A broadcast FM station is a hump about 200 kHz wide; air-band voice appears as short bursts that come and go.
-- **The noise floor** is the flat baseline underneath: the receiver's own noise plus whatever the antenna picks up.
-- **The DC spike** is a narrow peak exactly at the centre frequency. It is produced by the dongle itself, not by a transmitter.
-- **The edges** roll off beyond about ±1.1 MHz: that is the dongle's own filter.
-
-The title shows the tuned frequency, and the x axis is in MHz.
+1. [FreqFinder](https://github.com/MountainEnjoyer/FreqFinder): find a frequency with the FFT.
+2. [FrequencyShiftFilter](https://github.com/MountainEnjoyer/FrequencyShiftFilter): shift a signal to 0 Hz and filter it.
+3. [FrequencyShiftFilterDecimation](https://github.com/MountainEnjoyer/FrequencyShiftFilterDecimation): lower the sample rate without aliasing.
+4. [SdrReccord](https://github.com/MountainEnjoyer/SdrReccord): record a station and decode it to a WAV file.
+5. **RadioDecoderListener (this repository):** the same decoder, live.
 
 ## Repository contents
 
 ```
 RadioDecoderListener/
-├── exec.py      # the live spectrum viewer
+├── exec.py      # the live receiver: spectrum window, tuning buttons, audio
 ├── exec.sh      # launcher: activates the virtual environment and runs exec.py
 └── README.md
 ```
 
 ## Requirements
 
-- Linux (developed and tested on Arch Linux)
+- Linux (developed and tested on Arch Linux with PipeWire)
 - An RTL-SDR dongle (RTL2832U with an R820T/R820T2 tuner) and its antenna
-- Python 3.8 or later, with NumPy, Matplotlib and pyrtlsdr in a virtual environment
-- The `rtl-sdr` driver, and Tk for the plot window
+- Python 3.8 or later, with NumPy, SciPy, Matplotlib, pyrtlsdr and sounddevice in a virtual environment
+- The `rtl-sdr` driver, PortAudio for sound, and Tk for the window
 
 ## Installation (Arch Linux)
 
 ### 1. System packages
 
 ```bash
-sudo pacman -S --needed python tk git rtl-sdr
+sudo pacman -S --needed python tk git rtl-sdr portaudio
 ```
 
 - `rtl-sdr` is the driver (`librtlsdr`) that pyrtlsdr talks to. It also provides `rtl_test`, to check the dongle.
-- `tk` lets Matplotlib open its window. Without it, the script prints `FigureCanvasAgg is non-interactive` and shows nothing.
+- `portaudio` is the sound library sounddevice uses.
+- `tk` lets Matplotlib open its window.
 
 ### 2. Clone the repository
 
@@ -58,19 +56,21 @@ python -m venv .venv
 .venv/bin/pip install numpy scipy matplotlib sounddevice "pyrtlsdr[lib]"
 ```
 
-Use `pip`, not `pipx`: these are libraries the script imports, not command-line programs. SciPy and sounddevice are not used by the viewer yet; they are for the decoding stages that follow.
+Use `pip`, not `pipx`: these are libraries the script imports, not command-line programs. `pyrtlsdr[lib]` also installs a bundled copy of the driver; see Troubleshooting if importing `rtlsdr` fails with an `undefined symbol` error.
 
-`pyrtlsdr[lib]` also installs a bundled copy of the driver. Recent pyrtlsdr versions call a driver function (`rtlsdr_set_dithering`) that Arch's `rtl-sdr` package does not provide; see Troubleshooting if the import still fails.
-
-### 4. Check the dongle
-
-With the dongle plugged in:
+### 4. Check the dongle and the sound output
 
 ```bash
 rtl_test
 ```
 
-It should print `Found Rafael Micro R820T tuner` (or R820T2) and start counting samples. Stop it with Ctrl+C.
+should print `Found Rafael Micro R820T tuner` (or R820T2); stop it with Ctrl+C. Then play a test beep through the output the receiver will use:
+
+```bash
+.venv/bin/python -c "import numpy as np, sounddevice as sd; t=np.arange(48000)/48000; sd.play(0.3*np.sin(2*np.pi*440*t), 48000, device='pipewire'); sd.wait()"
+```
+
+If you hear nothing, try `'pulse'` or `'default'` instead of `'pipewire'`, and put the one that works in `OUTPUT_DEVICE` (see Configuration). `.venv/bin/python -m sounddevice` lists every output.
 
 ## Usage
 
@@ -80,63 +80,80 @@ From the repository folder:
 ./exec.sh
 ```
 
-A window opens with the live spectrum, starting at **123 MHz** (the aviation band).
+The window opens on **101.1 MHz** and the station starts playing within a fraction of a second.
 
 | Control | Action |
 | --- | --- |
-| **−1 MHz** | Tune 1 MHz down |
-| **+1 MHz** | Tune 1 MHz up |
-| Matplotlib toolbar | Zoom into part of the spectrum, pan, save an image |
-| Closing the window | Stops the viewer and releases the dongle |
+| **−1 MHz / +1 MHz** | Jump 1 MHz down or up |
+| **−0.1 MHz / +0.1 MHz** | Step to the neighbouring channel (FM stations sit on a 0.1 MHz grid) |
+| Red dashed line | The frequency you are hearing |
+| Title | The same frequency, in MHz |
+| Closing the window | Stops the receiver, the sound and the dongle |
 
-Tuning is limited to 25–1750 MHz, roughly the range of an R820T-based dongle.
+In the plot, a station is a hump about 200 kHz wide. Tune until the red line sits in the middle of one. Between stations you hear hiss.
 
-### Where to look
+### The status line
 
-| Band | Frequency | What you see |
-| --- | --- | --- |
-| Broadcast FM | 88–108 MHz | Wide, steady humps about 200 kHz wide: radio stations |
-| Aviation (AM) | 118–137 MHz | Short bursts when pilots and air traffic control talk |
-| Amateur 2 m / APRS | 144–146 MHz | Short bursts; APRS data packets on 144.800 MHz in Europe |
-| PMR446 walkie-talkies | 446.0–446.2 MHz | Brief transmissions on narrow channels |
-| ADS-B (aircraft positions) | 1090 MHz | Very short pulses from passing aircraft |
+Once a second, the terminal shows how far the signal gets through the program:
+
+```
+blocks read   47 | decoded   47 | audio queue  1 | played    3.9 s, silence    0.2 s | audio peak 0.41
+```
+
+| Field | Meaning |
+| --- | --- |
+| `blocks read` | Blocks received from the dongle (one every 85 ms) |
+| `decoded` | Blocks turned into audio. It should follow `blocks read`. |
+| `audio queue` | Decoded blocks waiting for the sound card. Small and steady is right. |
+| `played` / `silence` | Time of audio sent to the sound card, and time it had to fill with silence because nothing was ready |
+| `audio peak` | Loudest value in the last decoded block. Near 0 means nothing is being received. |
 
 ## How it works
 
-### Configuration
+### Three threads
 
-```python
-sdr.sample_rate = 2.4e6
-sdr.center_freq = 123e6
-sdr.gain = 12
-```
+A live receiver has three jobs that run at their own pace, so each gets its own thread, connected by queues:
 
-The dongle delivers 2.4 million complex I/Q samples per second, which gives a 2.4 MHz wide view centred on `center_freq`. 2.4 MS/s is the fastest rate most computers sustain over USB without losing samples. Frequencies are handled in MHz in the script (`Fs`, `Fc`) and converted to Hz only when talking to the dongle.
+| Thread | Job |
+| --- | --- |
+| **Reader** (`read_samples_async`) | The dongle streams without interruption. Each block of 204,800 samples goes into `raw_q`. |
+| **Decoder** (`decode_loop`) | Takes a block, runs it through the FM decoder, puts the audio into `audio_q`. |
+| **Sound card** (sounddevice's `OutputStream`) | Calls `play()` whenever it needs more audio and takes it from `audio_q`. If nothing is ready, it plays silence instead of garbage. |
 
-### The spectrum
+The **window** runs in the main thread: it plots the newest block's spectrum ten times a second and handles the buttons. Because reading, decoding and playing no longer wait for the window, the sound never stops while the plot redraws.
 
-Each update reads 262,144 samples (256 × 1024, about 0.11 s of signal) and computes their **power spectral density** with `mlab.psd`. It cuts the samples into 1024-sample pieces, takes the FFT of each, and averages the 256 results. A single FFT of noise is ragged; averaging gives a smooth, readable curve. Each of the 1024 frequency bins is 2.4 MHz / 1024 ≈ 2.3 kHz wide.
+**Why not `read_samples` and `sd.play()` in a loop?** With `read_samples`, samples arriving while Python decodes or draws are lost. `sd.play()` replaces whatever is playing, so each block cuts off the previous one. The result is short bursts of sound separated by gaps.
 
-### Updating instead of redrawing
+### The decoder, block by block
 
-The first spectrum is drawn once with `ax.psd(..., return_line=True)`, which returns the curve as an object. Every update after that only replaces the curve's heights with `line.set_ydata(...)`, rescales the y axis, and asks for a redraw. This is much faster than drawing a new plot each time and avoids flicker.
+`FMDemod.process()` applies the same chain as [SdrReccord](https://github.com/MountainEnjoyer/SdrReccord)'s `decode.py` to each 85 ms block:
 
-`plt.pause(interval)` then lets the window process the redraw and any clicks, without freezing it as `time.sleep` would. The loop runs until the window is closed (`plt.fignum_exists`).
+| Stage | Rate after |
+| --- | --- |
+| Shift the station from −250 kHz to 0 Hz | 2.4 MS/s |
+| Channel filter ±100 kHz (201-tap FIR), keep 1 sample in 10 | 240 kS/s |
+| FM demodulation: `angle(z[n]·conj(z[n−1]))` | 240 kS/s |
+| De-emphasis 50 µs (Europe), audio filter 15 kHz (101 taps), keep 1 in 5 | 48 kS/s |
+
+**Memory between blocks.** Every stage that looks at past samples keeps its memory from one block to the next:
+
+- each filter returns its internal state (`zi`), which is passed into the next block;
+- the shifting tone continues from the phase where it stopped;
+- the demodulator receives the previous block's last sample.
+
+Without this, every block would start from scratch and put a click at every join, about 12 times a second. With it, decoding block by block gives exactly the same output as decoding the whole signal at once.
+
+**The block size, 204,800 samples (85 ms),** is chosen for two reasons. It is 409,600 bytes, a multiple of the 16,384-byte transfers the driver uses when streaming. And it divides evenly by 10 and by 50, so both decimations keep exactly the same rhythm from one block to the next.
 
 ### Tuning
 
-`mlab.psd` returns the frequencies of its bins **relative to the centre**, from −1.2 to +1.2 MHz. They are stored once as `offsets`, so the absolute frequencies are always `Fc + offsets`. When a button is pressed, `retune()` keeps everything consistent:
+The dongle is always tuned **250 kHz above** the station you hear, as in SdrReccord. Every dongle produces a false peak at its exact center frequency (the DC spike); tuning beside the station keeps it out of the audio. The decoder shifts the station back to 0 Hz.
 
-1. sets the dongle's centre frequency;
-2. moves the curve to the new frequencies (`set_xdata`);
-3. moves the visible range (`set_xlim`) and updates the title;
-4. reads and discards 2048 samples, since the tuner needs a moment to settle and the first samples after a change still belong to the old frequency.
+When a button is pressed, `retune()` sets the dongle's new frequency and moves the curve, the visible range, the red marker and the title together. It does not reset the decoder: the audio carries on, and the new station is heard after a few blocks.
 
-The buttons call `retune()` from inside `plt.pause()`, between two reads, so tuning never collides with reading.
+### Volume and overflow
 
-### Releasing the dongle
-
-Everything runs inside `try` / `finally: sdr.close()`, so the dongle is released even after an error or Ctrl+C, and the next run can open it.
+The audio is scaled by a fixed `VOLUME` rather than normalised block by block, which would make the level jump every 85 ms. Both queues hold about 1.7 seconds; if one fills up, the oldest block is dropped, so a slow moment never builds up a growing delay.
 
 ## Configuration
 
@@ -144,35 +161,39 @@ All settings are at the top of `exec.py`.
 
 | Setting | Default | Description |
 | --- | --- | --- |
-| `sdr.center_freq` | `123e6` | Starting frequency in Hz. `100e6` starts in the FM band. |
-| `sdr.sample_rate` | `2.4e6` | Width of the view, in samples per second. Higher rates may lose samples over USB. |
-| `sdr.gain` | `12` | Receiver gain in dB. Raise it if signals are buried in noise; lower it if strong signals create false peaks everywhere. |
-| `NFFT` | `1024` | Samples per FFT. More gives finer frequency detail but a noisier curve per update. |
-| `interval` | `0.01` | Pause between updates, in seconds. The real rate is limited by reading and processing each block, about 0.1 s. |
+| `start_mhz` | `101.1` | Station tuned at start, in MHz. |
+| `OUTPUT_DEVICE` | `"pipewire"` | Sound output, by name or part of a name. Going through PipeWire follows your desktop's sound settings. |
+| `VOLUME` | `0.5` | Audio level. Raise it for a weak station; lower it if the sound distorts. |
+| `sdr.gain` | `12` | Receiver gain in dB. Raise it if stations are buried in noise; lower it if strong signals create false peaks. |
+| `FS` | `2.4e6` | Dongle sample rate. |
+| `OFFSET` | `250e3` | How far the dongle sits above the station, in Hz. |
+| `BLOCK` | `204800` | Samples per block. Keep it a multiple of 8,192 and of 50. |
+| `DEC1`, `DEC2` | `10`, `5` | Decimation factors: 2.4 MS/s → 240 kS/s → 48 kS/s. |
 
 ## Troubleshooting
 
 | Symptom | Cause | Fix |
 | --- | --- | --- |
-| `ModuleNotFoundError: No module named 'rtlsdr'` | pyrtlsdr is not installed in this project's `.venv` | `.venv/bin/pip install "pyrtlsdr[lib]"`. The package is named `pyrtlsdr`, the module `rtlsdr`. |
-| `AttributeError: ... librtlsdr.so: undefined symbol` (`rtlsdr_set_dithering`) | Recent pyrtlsdr expects a driver feature Arch's `rtl-sdr` lacks | Install `"pyrtlsdr[lib]"`; if the error remains, `.venv/bin/pip install "pyrtlsdr==0.2.93" setuptools`. |
-| `usb_claim_interface error -6`, or the dongle is busy | Another program (or a previous run) still holds the dongle | Close it; if the kernel's DVB-T driver grabbed the dongle, unplug and replug it, or blacklist `dvb_usb_rtl28xxu`. |
-| `FigureCanvasAgg is non-interactive`, no window opens | Matplotlib found no window system | `sudo pacman -S tk`; check that `MPLBACKEND` is not set to `Agg`. |
-| Only noise, no stations | Frequency with nothing on it, or weak reception | Try the FM band (88–108 MHz); extend the antenna rods (about 75 cm each for FM), move the antenna near a window, raise the gain. |
-| False peaks all over the spectrum | Gain too high: the receiver is overloaded | Lower `sdr.gain`. |
-| Many very narrow spikes | Interference from the computer or USB cable | Move the dongle away with a short USB extension cable. |
+| No sound, status line normal (`played` rising) | Audio goes to the wrong output, for example `HDA Intel PCH: HDMI 0` | Check the `Sound output:` line printed at start. Set `OUTPUT_DEVICE` to `"pipewire"`, `"pulse"` or `"default"`, whichever plays the test beep. |
+| `blocks read` stays at 0 | The dongle is not streaming | Look for an error above the status lines; check the dongle with `rtl_test`. |
+| `decoded` stays at 0 | The decoder fails | Its error is printed in full in the terminal. |
+| `audio peak` near 0.00 | Nothing is being received | Tune onto a station: the red line must sit in a hump. |
+| Hiss only | Between stations, or a very weak station | Step with ±0.1 MHz; extend the antenna rods (about 75 cm each for FM) and move the antenna near a window. |
+| Regular short dropouts, `silence` keeps rising | Decoding cannot keep up | Close other heavy programs. Each block takes well under its 85 ms on a desktop. |
+| Rare short gap after several minutes | The dongle's and the sound card's clocks differ slightly | Expected: the queues drop an old block rather than let the delay grow. |
+| `AttributeError: ... undefined symbol` (`rtlsdr_set_dithering`) | Recent pyrtlsdr expects a driver feature Arch's `rtl-sdr` lacks | Install `"pyrtlsdr[lib]"`; if the error remains, `.venv/bin/pip install "pyrtlsdr==0.2.93" setuptools`. |
+| `OSError: PortAudio library not found` | PortAudio is not installed | `sudo pacman -S portaudio` |
+| `FigureCanvasAgg is non-interactive`, no window | Matplotlib found no window system | `sudo pacman -S tk`; check that `MPLBACKEND` is not set to `Agg`. |
+| `usb_claim_interface error -6`, dongle busy | Another program, or a previous run, still holds it | Close it; unplug and replug the dongle if needed. |
 
-## Related projects
+## Roadmap
 
-This viewer is the first step of a series that goes from DSP fundamentals to a working FM receiver:
-
-- [FreqFinder](https://github.com/MountainEnjoyer/FreqFinder): find a frequency with the FFT.
-- [FrequencyShiftFilter](https://github.com/MountainEnjoyer/FrequencyShiftFilter): shift a signal to 0 Hz and filter it.
-- [FrequencyShiftFilterDecimation](https://github.com/MountainEnjoyer/FrequencyShiftFilterDecimation): lower the sample rate without aliasing.
-- [SdrReccord](https://github.com/MountainEnjoyer/SdrReccord): record an FM station and decode it to a WAV file.
+- **Done:** DSP fundamentals, offline FM decoding, live FM listening.
+- **Next:** AM for the aviation band (118–137 MHz), narrowband FM and SSB; then a modular architecture where each mode is a swappable demodulator, a spectrum and waterfall interface with click-to-tune, and digital modes such as RDS (station names), ADS-B (aircraft) and APRS.
 
 ## Further reading
 
-- [PySDR: A Guide to SDR and DSP using Python](https://pysdr.org), chapters on the frequency domain and the RTL-SDR
-- [pyrtlsdr](https://github.com/pyrtlsdr/pyrtlsdr)
-- [Matplotlib widgets](https://matplotlib.org/stable/api/widgets_api.html)
+- [PySDR: A Guide to SDR and DSP using Python](https://pysdr.org), chapters on FM and real-time processing
+- [pyrtlsdr](https://github.com/pyrtlsdr/pyrtlsdr), including `read_samples_async`
+- [sounddevice](https://python-sounddevice.readthedocs.io/): `OutputStream` and callbacks
+- [SciPy `lfilter`](https://docs.scipy.org/doc/scipy/reference/generated/scipy.signal.lfilter.html), and its `zi` state argument
